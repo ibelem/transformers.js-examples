@@ -23,7 +23,7 @@ function setStreamSize(width, height) {
 status.textContent = "Loading model...";
 
 // Load model and processor
-const model_id = "Xenova/gelan-c_all";
+const model_id = "webnn/gelan-c_all";
 const model = await AutoModel.from_pretrained(model_id);
 const processor = await AutoProcessor.from_pretrained(model_id);
 
