@@ -27,10 +27,14 @@ export default function App() {
         if (!navigator.gpu) {
           throw new Error("WebGPU is not supported in this browser.");
         }
-        const model_id = "Xenova/modnet";
+        const model_id = "webnn/modnet";
         env.backends.onnx.wasm.proxy = false;
         modelRef.current ??= await AutoModel.from_pretrained(model_id, {
-          device: "webgpu",
+          device: "webnn-gpu",
+          "dtype": "fp16",
+          session_options: {
+            "logSeverityLevel": 0,
+          }
         });
         processorRef.current ??= await AutoProcessor.from_pretrained(model_id);
       } catch (err) {
