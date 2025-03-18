@@ -59,6 +59,14 @@
     </div>
     <label id="status"></label>
 
+    <div>
+      session_options: { logSeverityLevel: 0 }<br/>
+      env.backends.onnx.logSeverityLevel = 0; <br/>
+      number of partitions supported by WebNN: 10<br/>number of nodes in the graph: 253<br/>number of nodes supported by WebNN: 244<br/>
+      <a href="?provider=webgpu">WebGPU</a> | <a href="?provider=webnn-gpu">WebNN GPU</a> | <a href="?provider=webnn-npu">WebNN NPU</a>
+    </div>
+    <div id="log"></div>
+
     <script type="module" src="/main.js"></script>
   </body>
 </html>

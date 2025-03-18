@@ -1,7 +1,9 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import { pipeline, RawImage } from "@huggingface/transformers";
+import { pipeline, RawImage, env } from "@huggingface/transformers";
+
+env.backends.onnx.logSeverityLevel = 0;
 
 // Constants
 const EXAMPLE_URL =
@@ -14,11 +16,26 @@ const fileUpload = document.getElementById("upload");
 const imageContainer = document.getElementById("container");
 const example = document.getElementById("example");
 
-// Create a new depth-estimation pipeline
-status.textContent = "Loading model...";
+const urlParams = new URLSearchParams(window.location.search);
+const provider = urlParams.get('provider');
+
+let deviceType = 'webgpu';
+if (provider) {
+  deviceType = provider.toLowerCase();
+}
+
+document.querySelector('#log').innerHTML = deviceType + ' + fp16';
+
 const depth_estimator = await pipeline(
   "depth-estimation",
-  "onnx-community/depth-anything-v2-small",
+  "webnn/depth-anything-v2-small-518",
+  {
+    device: deviceType,
+    dtype: "fp16",
+    session_options: {
+      logSeverityLevel: 0
+    }
+  }
 );
 status.textContent = "Ready";
 
@@ -44,36 +61,78 @@ fileUpload.addEventListener("change", function (e) {
 let onSliderChange;
 
 // Predict depth map for the given image
-async function predict(url) {
+async function predict(imageUrl) {
   imageContainer.innerHTML = "";
-  const image = await RawImage.fromURL(url);
-
-  // Set up scene and slider controls
-  const { canvas, setDisplacementMap } = setupScene(
-    url,
-    image.width,
-    image.height,
+  const origImg = await RawImage.fromURL(imageUrl);
+  console.log(`Image - Original: ${origImg.width} x ${origImg.height}`);
+  
+  // Set up scene with original dimensions
+  const { canvas: displayCanvas, setDisplacementMap } = setupScene(
+    imageUrl,
+    origImg.width,
+    origImg.height
   );
-
-  imageContainer.append(canvas);
-
+  imageContainer.append(displayCanvas);
+  
+  // Resize to 518x518 for depth_estimator
+  const requiredSize = 518;
+  const resizeCanvas = new OffscreenCanvas(requiredSize, requiredSize);
+  const resizeCtx = resizeCanvas.getContext('2d');
+  
+  // Convert the RawImage to a format compatible with drawImage
+  const imgBlob = await origImg.toBlob();
+  const imgBlobUrl = URL.createObjectURL(imgBlob);
+  const htmlImg = new Image();
+  await new Promise(resolve => {
+    htmlImg.onload = resolve;
+    htmlImg.src = imgBlobUrl;
+  });
+  
+  // Draw and resize to 518x518 square (depth_estimator requirement)
+  resizeCtx.drawImage(htmlImg, 0, 0, requiredSize, requiredSize);
+  
+  // Convert back to a format usable by depth_estimator
+  const processedBlob = await resizeCanvas.convertToBlob({ type: 'image/png' });
+  const processedImg = await RawImage.fromBlob(processedBlob);
+  
+  // Clean up
+  URL.revokeObjectURL(imgBlobUrl);
+  console.log(`Image - Resized for depth estimation: ${processedImg.width} x ${processedImg.height}`);
+  
   status.textContent = "Analysing...";
-  const { depth } = await depth_estimator(image);
-
-  setDisplacementMap(depth.toCanvas());
+  const { depth } = await depth_estimator(processedImg);
+  
+  // Get depth map as canvas
+  const depthCanvas = depth.toCanvas();
+  console.log(`Depth map size: ${depthCanvas.width} x ${depthCanvas.height}`);
+  
+  // Restore depth map canvas to original aspect ratio
+  const aspectRatio = origImg.width / origImg.height;
+  const outputWidth = origImg.width;
+  const outputHeight = origImg.height;
+  
+  const finalCanvas = document.createElement('canvas');
+  finalCanvas.width = outputWidth;
+  finalCanvas.height = outputHeight;
+  const finalCtx = finalCanvas.getContext('2d');
+  finalCtx.drawImage(depthCanvas, 0, 0, outputWidth, outputHeight);
+  console.log(`Output Canvas - Restored to: ${finalCanvas.width} x ${finalCanvas.height}`);
+  
+  // Set the displacement map with corrected aspect ratio
+  setDisplacementMap(finalCanvas);
   status.textContent = "";
-
+  
   // Add slider control
-  const slider = document.createElement("input");
-  slider.type = "range";
-  slider.min = 0;
-  slider.max = 1;
-  slider.step = 0.01;
-  slider.addEventListener("input", (e) => {
+  const depthSlider = document.createElement("input");
+  depthSlider.type = "range";
+  depthSlider.min = 0;
+  depthSlider.max = 1;
+  depthSlider.step = 0.01;
+  depthSlider.addEventListener("input", (e) => {
     onSliderChange(parseFloat(e.target.value));
   });
-  slider.defaultValue = DEFAULT_SCALE;
-  imageContainer.append(slider);
+  depthSlider.defaultValue = DEFAULT_SCALE;
+  imageContainer.append(depthSlider);
 }
 
 function setupScene(url, w, h) {

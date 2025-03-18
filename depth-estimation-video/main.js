@@ -2,16 +2,10 @@ import {
   AutoModel,
   AutoImageProcessor,
   RawImage,
+  env
 } from "@huggingface/transformers";
 
-async function hasFp16() {
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    return adapter.features.has("shader-f16");
-  } catch (e) {
-    return false;
-  }
-}
+env.backends.onnx.logSeverityLevel = 0; 
 
 // Reference the elements that we will need
 const status = document.getElementById("status");
@@ -31,14 +25,26 @@ function setStreamSize(width, height) {
 status.textContent = "Loading model...";
 
 // Load model and processor
-const model_id = "onnx-community/depth-anything-v2-small";
+const model_id = "webnn/depth-anything-v2-small-504";
+
+const urlParams = new URLSearchParams(window.location.search);
+const provider = urlParams.get('provider');
+
+let deviceType = 'webgpu';
+if(provider) {
+  deviceType = provider.toLowerCase();
+}
+
+document.querySelector('#log').innerHTML = deviceType + ' + fp16';
 
 let model;
 try {
   model = await AutoModel.from_pretrained(model_id, {
-    device: "webgpu",
-    // Use fp16 if available, otherwise use fp32
-    dtype: (await hasFp16()) ? "fp16" : "fp32",
+    device: deviceType,
+    dtype: "fp16",
+    session_options: {
+      logSeverityLevel: 0
+    }
   });
 } catch (err) {
   status.textContent = err.message;

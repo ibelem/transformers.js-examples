@@ -1,4 +1,6 @@
-import { AutoModel, AutoProcessor, RawImage } from "@huggingface/transformers";
+import { AutoModel, AutoProcessor, RawImage, env } from "@huggingface/transformers";
+
+env.backends.onnx.logSeverityLevel = 0; 
 
 // Reference the elements that we will need
 const status = document.getElementById("status");
@@ -20,9 +22,30 @@ function setStreamSize(width, height) {
 
 status.textContent = "Loading model...";
 
+const urlParams = new URLSearchParams(window.location.search);
+const provider = urlParams.get('provider');
+
+let deviceType = 'webgpu';
+if(provider) {
+  deviceType = provider.toLowerCase();
+}
+
+document.querySelector('#log').innerHTML = deviceType + ' + fp16';
+
 // Load model and processor
 const model_id = "Xenova/gelan-c_all";
-const model = await AutoModel.from_pretrained(model_id);
+const model = await AutoModel.from_pretrained(model_id, {
+  device: deviceType,
+  dtype: "fp16",
+  session_options: {
+    logSeverityLevel: 0,
+    freeDimensionOverrides: {
+      batch_size: 1,
+      height: 128,
+      width: 160
+    }
+  }
+});
 const processor = await AutoProcessor.from_pretrained(model_id);
 
 // Set up controls

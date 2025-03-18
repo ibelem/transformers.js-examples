@@ -29,6 +29,14 @@
     </div>
     <label id="status"></label>
     <input id="upload" type="file" accept="image/*" />
+    <img id="img" />
+
+    <div>
+      session_options: { logSeverityLevel: 0 }<br/>
+      env.backends.onnx.logSeverityLevel = 0; <br/>
+      <a href="?provider=webgpu">WebGPU</a> | <a href="?provider=webnn-gpu">WebNN GPU</a> | <a href="?provider=webnn-npu">WebNN NPU</a>
+    </div>
+    <div id="log"></div>
 
     <script type="module" src="/main.js"></script>
   </body>
