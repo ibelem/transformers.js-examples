@@ -8,7 +8,7 @@
   </head>
 
   <body>
-    Transformers.js | Real-time object detection / Yolov8m
+    Transformers.js | Real-time object detection / Yolo
     <div class="container">
       <video id="video" playsinline></video>
       <canvas id="canvas"></canvas>
@@ -19,6 +19,19 @@
       <div>
         <label for="confidence">Confidence Threshold: <span id="confidence-value">0.25</span></label>
         <input type="range" min="0.1" max="0.9" step="0.05" value="0.25" id="confidence">
+      </div>
+      <div>
+        <label>Select Model:</label>
+        <input type="radio" id="yolo11n" name="model" value="webnn/yolo11n">
+        <label for="yolo11n">YOLO11n</label>
+        <input type="radio" id="yolov8n" name="model" value="webnn/yolov8n" checked>
+        <label for="yolov8n">YOLOv8n</label>
+        <input type="radio" id="yolov8m" name="model" value="webnn/yolov8m">
+        <label for="yolov8m">YOLOv8m</label>
+      </div>
+      <div>
+        <button id="start-button">Start Detection</button>
+        <button id="stop-button" disabled>Stop Detection</button>
       </div>
     </div>
     

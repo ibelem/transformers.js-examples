@@ -13,10 +13,29 @@ const confidenceSlider = document.getElementById("confidence");
 const confidenceValue = document.getElementById("confidence-value");
 
 // Configuration
-const MODEL_ID = "webnn/yolov8m";
+let MODEL_ID = "webnn/yolov8n"; // Default model
 let confidenceThreshold = 0.25;
 let isProcessing = false;
 let lastFrameTime = 0;
+let detectionLoopId = null; // Store the requestAnimationFrame ID
+let stream = null; // Store the camera stream
+
+// Add event listeners for model selection
+const modelRadios = document.getElementsByName("model");
+modelRadios.forEach(radio => {
+  radio.addEventListener("change", async () => {
+    // Stop the current detection process
+    stopDetection();
+
+    // Update the model ID
+    MODEL_ID = radio.value;
+    console.log(`Model switched to: ${MODEL_ID}`);
+    statusElement.textContent = `Model switched to: ${MODEL_ID}`;
+
+    // Start the detection with the new model
+    await startDetection();
+  });
+});
 
 // Initialize sliders
 confidenceSlider.value = confidenceThreshold;
@@ -35,7 +54,7 @@ const COLORS = [
 ];
 
 async function initializeModel() {
-  statusElement.textContent = "Loading YOLOv8m model...";
+  statusElement.textContent = "Loading model...";
   
   try {
     // Detect best available backend
@@ -48,6 +67,9 @@ async function initializeModel() {
     const model = await AutoModel.from_pretrained(MODEL_ID, {
       device: provider.toLowerCase(),
       dtype: "fp16",
+      session_options: {
+        logSeverityLevel: 0
+      }
     });
     
     const processor = await AutoProcessor.from_pretrained(MODEL_ID);
@@ -81,15 +103,16 @@ function setupCamera() {
       videoElement.srcObject = stream;
       
       videoElement.onloadedmetadata = () => {
-        // Set canvas size to match video
-        canvasElement.width = videoElement.videoWidth;
-        canvasElement.height = videoElement.videoHeight;
+        // Set canvas size to 720px width and proportional height
+        const aspectRatio = videoElement.videoHeight / videoElement.videoWidth;
+        canvasElement.width = 720;
+        canvasElement.height = 720 * aspectRatio;
         overlayElement.style.width = `${canvasElement.width}px`;
-        overlayElement.style.height = `${canvasElement.height}px`;
+        // overlayElement.style.height = `${canvasElement.height}px`;
         
         // Start video playback
         videoElement.play();
-        resolve();
+        resolve(stream);
       };
     })
     .catch(error => {
@@ -100,32 +123,34 @@ function setupCamera() {
 }
 
 function processDetections(outputs, imageWidth, imageHeight, classLabels) {
-  // Clear previous detections
-  overlayElement.innerHTML = "";
-  
+
   // Process YOLOv8 outputs (shape: [1, 84, 8400])
   // For each of the 8400 predictions, we have 84 values:
   // - First 4 are bounding box coordinates (x, y, width, height)
   // - Remaining 80 are class confidences for COCO dataset
-  
-  const predictions = outputs.tolist()[0];  // Get the first batch
-  const numClasses = predictions.length - 4;  // Subtract 4 for bbox coordinates
-  const numPredictions = predictions[0].length;  // Number of predictions (8400)
-  
+
+  // Clear previous detections
+  overlayElement.innerHTML = "";
+
+  const scaleX = canvasElement.width / 640; // Scale factor for width
+  const scaleY = canvasElement.height / 640; // Scale factor for height
+
+  const predictions = outputs.tolist()[0]; // Get the first batch
+  const numClasses = predictions.length - 4; // Subtract 4 for bbox coordinates
+  const numPredictions = predictions[0].length; // Number of predictions (8400)
+
   let detections = [];
-  
+
   // Process each prediction
   for (let i = 0; i < numPredictions; i++) {
-    // Get bbox coordinates (center_x, center_y, width, height)
     const x = predictions[0][i];
     const y = predictions[1][i];
     const w = predictions[2][i];
     const h = predictions[3][i];
-    
-    // Find the class with highest confidence
+
     let maxScore = 0;
     let maxClassIndex = -1;
-    
+
     for (let c = 0; c < numClasses; c++) {
       const score = predictions[c + 4][i];
       if (score > maxScore) {
@@ -133,31 +158,31 @@ function processDetections(outputs, imageWidth, imageHeight, classLabels) {
         maxClassIndex = c;
       }
     }
-    
-    // Skip if below threshold
+
     if (maxScore < confidenceThreshold) continue;
-    
-    // Convert from center coordinates to corner coordinates
-    const xmin = (x - w/2) / 640 * imageWidth;
-    const ymin = (y - h/2) / 640 * imageHeight;
-    const width = w / 640 * imageWidth;
-    const height = h / 640 * imageHeight;
-    
+
+    const xmin = (x - w / 2) * scaleX;
+    const ymin = (y - h / 2) * scaleY;
+    const width = w * scaleX;
+    const height = h * scaleY;
+
     detections.push({
       bbox: [xmin, ymin, width, height],
       score: maxScore,
-      class: maxClassIndex
+      class: maxClassIndex,
     });
   }
-  
-  // Draw detections
-  detections.forEach(detection => {
+
+  // Apply Non-Maximum Suppression (NMS)
+  detections = applyNMS(detections, 0.5); // 0.5 is the IoU threshold
+
+  // Render filtered detections
+  detections.forEach((detection) => {
     const [x, y, width, height] = detection.bbox;
     const className = classLabels[detection.class];
     const color = COLORS[detection.class % COLORS.length];
     const score = detection.score;
-    
-    // Create box element
+
     const boxElement = document.createElement("div");
     boxElement.className = "detection-box";
     boxElement.style.left = `${x}px`;
@@ -165,18 +190,62 @@ function processDetections(outputs, imageWidth, imageHeight, classLabels) {
     boxElement.style.width = `${width}px`;
     boxElement.style.height = `${height}px`;
     boxElement.style.borderColor = color;
-    
-    // Create label element
+
     const labelElement = document.createElement("div");
     labelElement.className = "detection-label";
     labelElement.style.backgroundColor = color;
     labelElement.textContent = `${className} ${(score * 100).toFixed(1)}%`;
-    
+
     boxElement.appendChild(labelElement);
     overlayElement.appendChild(boxElement);
   });
-  
+
   return detections.length;
+}
+
+function applyNMS(detections, iouThreshold) {
+  // Sort detections by confidence score in descending order
+  detections.sort((a, b) => b.score - a.score);
+
+  const filteredDetections = [];
+  const used = new Array(detections.length).fill(false);
+
+  for (let i = 0; i < detections.length; i++) {
+    if (used[i]) continue;
+
+    const detectionA = detections[i];
+    filteredDetections.push(detectionA);
+
+    for (let j = i + 1; j < detections.length; j++) {
+      if (used[j]) continue;
+
+      const detectionB = detections[j];
+      const iou = calculateIoU(detectionA.bbox, detectionB.bbox);
+
+      if (iou > iouThreshold) {
+        used[j] = true; // Suppress overlapping box
+      }
+    }
+  }
+
+  return filteredDetections;
+}
+
+function calculateIoU(boxA, boxB) {
+  const [xA, yA, wA, hA] = boxA;
+  const [xB, yB, wB, hB] = boxB;
+
+  const x1 = Math.max(xA, xB);
+  const y1 = Math.max(yA, yB);
+  const x2 = Math.min(xA + wA, xB + wB);
+  const y2 = Math.min(yA + wA, yB + hB);
+
+  const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const areaA = wA * hA;
+  const areaB = wB * hB;
+
+  const union = areaA + areaB - intersection;
+  return intersection / union;
 }
 
 async function detectFrame(model, processor, ctx) {
@@ -227,25 +296,56 @@ async function startDetection() {
   try {
     // Initialize model and camera
     const { model, processor } = await initializeModel();
-    await setupCamera();
-    
-    const ctx = canvasElement.getContext("2d");
-    
+    stream = await setupCamera();
+
+    // Get the canvas context with willReadFrequently set to true
+    const ctx = canvasElement.getContext("2d", { willReadFrequently: true });
+
     // Main detection loop
     function detectionLoop() {
       detectFrame(model, processor, ctx).finally(() => {
-        requestAnimationFrame(detectionLoop);
+        detectionLoopId = requestAnimationFrame(detectionLoop);
       });
     }
-    
+
     // Start detection loop
     detectionLoop();
-    
   } catch (error) {
     console.error("Application error:", error);
     statusElement.textContent = `Failed to start: ${error.message}`;
   }
 }
 
-// Start the application when the page is loaded
-window.onload = startDetection;
+function stopDetection() {
+  if (detectionLoopId) {
+    cancelAnimationFrame(detectionLoopId);
+    detectionLoopId = null;
+  }
+
+  if (stream) {
+    const tracks = stream.getTracks();
+    tracks.forEach((track) => track.stop());
+    stream = null;
+  }
+
+  videoElement.srcObject = null;
+  isProcessing = false; // Ensure no further frames are processed
+  statusElement.textContent = "Detection stopped.";
+  fpsElement.textContent = "FPS: 0";
+}
+
+// Add event listeners for start and stop buttons
+const startButton = document.getElementById("start-button");
+const stopButton = document.getElementById("stop-button");
+
+startButton.addEventListener("click", async () => {
+  startButton.disabled = true;
+  stopButton.disabled = false;
+  await startDetection();
+});
+
+stopButton.addEventListener("click", () => {
+  stopDetection();
+  startButton.disabled = false;
+  stopButton.disabled = true;
+});
